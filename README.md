@@ -33,11 +33,11 @@ $ ./local-log4j-vuln-scanner [-verbose] [-quiet] [-ignore-v1] \
 
 The `-verbose` flag will show every .jar and .war file checked, even if no problem is found.
 
-The `-quiet` flag will supress output except for indicators of a known vulnerability.
+The `-quiet` flag will suppress output except for indicators of a known vulnerability.
 
 The `-ignore-v1` flag will _exclude_ checks for log4j 1.x vulnerabilities.
 
-The `-log` flag allows everythig to be written to a log file instead of stdout/stderr.
+The `-log` flag allows everything to be written to a log file instead of stdout/stderr.
 
 Use the `-exclude` flag to exclude subdirectories from being scanned. Can be used multiple times.
 
@@ -78,6 +78,6 @@ go build -o local-log4j-vuln-patcher ./patcher
 
 GNU General Public License, version 3
 
-# Author
+# Original author
 
 Hilko Bengen <<bengen@hilluzination.de>>
