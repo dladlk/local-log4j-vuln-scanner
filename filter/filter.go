@@ -11,15 +11,18 @@ import (
 
 func IsVulnerableClass(buf []byte, filename string, examineV1 bool) string {
 	hasher := sha256.New()
-	io.Copy(hasher, bytes.NewBuffer(buf))
+	_, err := io.Copy(hasher, bytes.NewBuffer(buf))
+	if err != nil {
+		return "Failed to copy buffer"
+	}
 	sum := hex.EncodeToString(hasher.Sum(nil))
 
-	if desc, ok := vulnVersions[sum]; ok {
+	if desc, ok := vulnerableVersions[sum]; ok {
 		return desc
 	}
 
 	if examineV1 {
-		if desc, ok := vulnVersionsV1[sum]; ok {
+		if desc, ok := vulnerableVersionsV1[sum]; ok {
 			return desc
 		}
 		// cf. https://sources.debian.org/src/apache-log4j1.2/1.2.17-10/debian/patches/CVE-2019-17571.patch
@@ -43,7 +46,7 @@ func IsVulnerableClass(buf []byte, filename string, examineV1 bool) string {
 	return ""
 }
 
-var vulnVersions = map[string]string{
+var vulnerableVersions = map[string]string{
 	"39a495034d37c7934b64a9aa686ea06b61df21aa222044cc50a47d6903ba1ca8": "log4j 2.0-rc1",       // JndiLookup.class
 	"a03e538ed25eff6c4fe48aabc5514e5ee687542f29f2206256840e74ed59bcd2": "log4j 2.0-rc2",       // JndiLookup.class
 	"964fa0bf8c045097247fa0c973e0c167df08720409fd9e44546e0ceda3925f3e": "log4j 2.0.1",         // JndiLookup.class
@@ -61,7 +64,7 @@ var vulnVersions = map[string]string{
 	"db07ef1ea174e000b379732681bd835cfede648a7971bf4e9a0d31981582d69e": "log4j-2.15.0",        // JndiManager.class
 }
 
-var vulnVersionsV1 = map[string]string{
+var vulnerableVersionsV1 = map[string]string{
 	"6adb3617902180bdf9cbcfc08b5a11f3fac2b44ef1828131296ac41397435e3d": "log4j 1.2.4",                // SocketNode.class
 	"3ef93e9cb937295175b75182e42ba9a0aa94f9f8e295236c9eef914348efeef0": "log4j 1.2.6-1.2.9",          // SocketNode.class
 	"bee4a5a70843a981e47207b476f1e705c21fc90cb70e95c3b40d04a2191f33e9": "log4j 1.2.8",                // SocketNode.class
