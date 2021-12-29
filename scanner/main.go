@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	zip "github.com/hillu/local-log4j-vuln-scanner/appendedzip"
 	detectorFilter "github.com/hillu/local-log4j-vuln-scanner/filter"
@@ -34,19 +35,19 @@ func handleJar(path string, ra io.ReaderAt, sz int64) {
 		case ".jar", ".war", ".ear":
 			fr, err := file.Open()
 			if err != nil {
-				_, _ = fmt.Fprintf(logFile, "can't open JAR file member for reading: %s (%s): %v\n", path, file.Name, err)
+				logInaccessible("can't open JAR file member for reading", path+"/"+file.Name, err)
 				continue
 			}
 			buf, err := ioutil.ReadAll(fr)
 			_ = fr.Close()
 			if err != nil {
-				_, _ = fmt.Fprintf(logFile, "can't read JAR file member: %s (%s): %v\n", path, file.Name, err)
+				logInaccessible("can't read JAR file member", path+"/"+file.Name, err)
 			}
 			handleJar(path+"::"+file.Name, bytes.NewReader(buf), int64(len(buf)))
 		default:
 			fr, err := file.Open()
 			if err != nil {
-				_, _ = fmt.Fprintf(logFile, "can't open JAR file member for reading: %s (%s): %v\n", path, file.Name, err)
+				logInaccessible("can't open JAR file member for reading", path+"/"+file.Name, err)
 				continue
 			}
 
@@ -54,7 +55,7 @@ func handleJar(path string, ra io.ReaderAt, sz int64) {
 			buf := bytes.NewBuffer(nil)
 			if _, err := io.CopyN(buf, fr, 4); err != nil {
 				if err != io.EOF && !quiet {
-					_, _ = fmt.Fprintf(logFile, "can't read magic from JAR file member: %s (%s): %v\n", path, file.Name, err)
+					logInaccessible("can't read magic from JAR file member", path+"/"+file.Name, err)
 				}
 				_ = fr.Close()
 				continue
@@ -65,10 +66,14 @@ func handleJar(path string, ra io.ReaderAt, sz int64) {
 			_, err = io.Copy(buf, fr)
 			_ = fr.Close()
 			if err != nil {
-				_, _ = fmt.Fprintf(logFile, "can't read JAR file member: %s (%s): %v\n", path, file.Name, err)
+				logInaccessible("can't read JAR file member", path+"/"+file.Name, err)
 				continue
 			}
+
+			incrementProgress(path, file.Name)
+
 			if desc := detectorFilter.IsVulnerableClass(buf.Bytes(), file.Name, !ignoreV1); desc != "" {
+				countMatched++
 				_, _ = fmt.Fprintf(logFile, "indicator for vulnerable component found in %s (%s): %s\n", path, file.Name, desc)
 				continue
 			}
@@ -101,13 +106,19 @@ var verbose bool
 var logFileName string
 var quiet bool
 var ignoreV1 bool
+var reportInaccessible bool
+
+var startAll, startRoot, lastStepStart int64
+var countScanned, countMatched, progressInterval int
 
 func main() {
 	flag.Var(&excludes, "exclude", "paths to exclude (can be used multiple times)")
+	flag.BoolVar(&reportInaccessible, "report-inaccessible", false, "report inaccessible files")
 	flag.BoolVar(&verbose, "verbose", false, "log every archive file considered")
 	flag.StringVar(&logFileName, "log", "", "log file to write output to")
 	flag.BoolVar(&quiet, "quiet", false, "no output unless vulnerable")
 	flag.BoolVar(&ignoreV1, "ignore-v1", false, "ignore log4j 1.x versions")
+	flag.IntVar(&progressInterval, "progress-interval", 100000, "progress report interval")
 	flag.Usage = func() {
 		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
 		flag.PrintDefaults()
@@ -135,10 +146,17 @@ func main() {
 		defer f.Close()
 	}
 
+	startAll = time.Now().UnixMilli()
+	lastStepStart = startAll
+	countScanned = 0
+	countMatched = 0
+
 	for _, root := range args {
-		_ = filepath.Walk(filepath.Clean(root), func(path string, info os.FileInfo, err error) error {
+		startRoot = time.Now().UnixMilli()
+		cleanPath := filepath.Clean(root)
+		_ = filepath.Walk(cleanPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				_, _ = fmt.Fprintf(errFile, "%s: %s\n", path, err)
+				logInaccessible("can't access", path, err)
 				return nil
 			}
 			if excludes.Has(path) {
@@ -147,21 +165,19 @@ func main() {
 			if info.IsDir() {
 				return nil
 			}
+			incrementProgress(path)
+
 			switch ext := strings.ToLower(filepath.Ext(path)); ext {
-			case ".jar", ".war", ".ear":
+			case ".jar", ".war", ".ear", ".zip":
 				f, err := os.Open(path)
 				if err != nil {
-					_, _ = fmt.Fprintf(errFile, "can't open %s: %v\n", path, err)
+					logInaccessible("can't open", path, err)
 					return nil
 				}
 				defer f.Close()
 				sz, err := f.Seek(0, io.SeekEnd)
 				if err != nil {
-					_, _ = fmt.Fprintf(errFile, "can't seek in %s: %v\n", path, err)
-					return nil
-				}
-				if _, err := f.Seek(0, io.SeekEnd); err != nil {
-					_, _ = fmt.Fprintf(errFile, "can't seek in %s: %v\n", path, err)
+					logInaccessible("can't seek in", path, err)
 					return nil
 				}
 				handleJar(path, f, sz)
@@ -170,9 +186,36 @@ func main() {
 			}
 			return nil
 		})
+		logInfo(fmt.Sprintf("Scanned %s in %v", cleanPath, time.Now().UnixMilli()-startRoot))
 	}
 
 	if !quiet {
-		fmt.Println("\nScan finished")
+		fmt.Printf("\nScan finished in %v ms\n", time.Now().UnixMilli()-startAll)
+	}
+}
+
+func logInaccessible(message string, s string, err error) {
+	if reportInaccessible {
+		_, _ = fmt.Fprintf(errFile, "ERROR\t"+message+" %s: %v\n", s, err)
+	}
+}
+
+func currentTimeStr() string {
+	return time.Now().Format("15:04:05")
+}
+
+func logInfo(message string) {
+	_, _ = fmt.Fprintf(logFile, "%s INFO\t%s\n", currentTimeStr(), message)
+}
+
+func incrementProgress(path ...string) {
+	countScanned++
+	if countScanned%progressInterval == 0 {
+		var now = time.Now().UnixMilli()
+		var curStepDuration = now - lastStepStart
+		lastStepStart = now
+		logInfo(fmt.Sprintf("Done %v, found %v, %v per %v, cur %s", formatCount(countScanned),
+			formatCount(countMatched), formatDuration(curStepDuration),
+			formatCount(progressInterval), fmt.Sprint(path)))
 	}
 }
